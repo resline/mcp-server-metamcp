@@ -1,44 +1,35 @@
-# Use the official uv Debian image as base
-FROM ghcr.io/astral-sh/uv:debian
+# Multi-stage production image for MetaMCP
+# ---------- Build stage ----------
+FROM node:20-alpine AS build
 
-# Install Node.js and npm
-RUN apt-get update && apt-get install -y \
-    curl \
-    gnupg \
-    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
-    && apt-get install -y nodejs \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
+# Install tini for better signal handling
+RUN apk add --no-cache tini
 
-# Verify Node.js and npm installation
-RUN node --version && npm --version
-
-# Verify uv is installed correctly
-RUN uv --version
-
-# Verify npx is available
-RUN npx --version || npm install -g npx
-
-# Set the working directory
 WORKDIR /app
 
-# Copy package files
+# Install dependencies based on lock file if present, fall back to package.json
 COPY package*.json ./
+RUN npm ci --ignore-scripts
 
-# Install dependencies
-RUN npm ci
-
-# Copy the rest of the application
+# Copy the rest of the source code and build the TypeScript project
 COPY . .
-
-# Build the application
 RUN npm run build
 
-# Set environment variables
-ENV NODE_ENV=production
+# ---------- Production stage ----------
+FROM node:20-alpine
 
-# Expose the application port
-EXPOSE 3000
+# Create app directory
+WORKDIR /app
 
-# Run the application
-ENTRYPOINT ["node", "dist/index.js"] 
+# Copy production node_modules and built sources
+COPY --from=build /app/node_modules ./node_modules
+COPY --from=build /app/dist ./dist
+
+# Copy package metadata
+COPY package*.json ./
+
+ARG PORT=12005
+ENV PORT=$PORT
+EXPOSE $PORT
+
+CMD ["node", "dist/index.js", "--port", "$PORT", "--use-docker-host"]
